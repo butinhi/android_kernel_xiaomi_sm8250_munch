@@ -84,7 +84,7 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo "[*] Downloading and running VFS remote setup script..."
     curl -LSs "https://raw.githubusercontent.com/Hybrid-Mount/meta-hybrid_mount/dev/module/vfs/setup.sh" | bash
-    git apply hybrid-mount.patch
+    git apply --recount --ignore-whitespace hybrid-mount.patch
     echo "[+] VFS setup finished."
 fi
 
