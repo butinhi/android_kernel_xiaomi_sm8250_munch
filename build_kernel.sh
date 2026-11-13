@@ -84,7 +84,7 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo "[*] Downloading and running VFS remote setup script..."
     curl -LSs "https://raw.githubusercontent.com/Hybrid-Mount/meta-hybrid_mount/dev/module/vfs/setup.sh" | bash
-    git apply --recount --ignore-whitespace --reject hybrid-mount.patch || { echo "=== REJECTED DIFF ==="; cat fs/hybridmount/hybridmount.c.rej; echo "=== TARGET FILE CONTEXT ==="; sed -n '995,1035p' fs/hybridmount/hybridmount.c; exit 1; }
+    git apply --recount --ignore-whitespace --reject hybrid-mount.patch || { echo "=== TARGET CONTEXT ==="; grep -n -C 15 "hm_d_revalidate_common" fs/hybridmount/hybridmount.c; exit 1; }
     echo "[+] VFS setup finished."
 fi
 
