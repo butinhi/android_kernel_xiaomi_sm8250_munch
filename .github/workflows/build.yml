@@ -83,6 +83,6 @@ jobs:
     - name: Upload Flashable ZIP
       uses: actions/upload-artifact@v7
       with:
-        name: APTKernel-${{ github.event.inputs.device }}-${{ github.event.inputs.target_os }}-${{ github.run_id }}
-        path: APTKernel_*.zip
+        name: ${{ github.event.inputs.device }}-${{ github.event.inputs.target_os }}-${{ github.run_id }}
+        path: "*.zip"
         compression-level: 0 # Already compressed as a zip file; no further compression is needed.
