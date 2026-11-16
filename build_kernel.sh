@@ -3,6 +3,10 @@
 # Exit on any error
 set -e
 
+# BakaSU main, 2026-11-16. The SUSFS 2.4 glue (scripts/bakasu-*.patch and the
+# fs/ hooks) is tied to this revision; bump both together.
+BAKASU_REVISION="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
+
 # ==========================================
 # Argument Parsing
 # ==========================================
@@ -75,9 +79,33 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo " [*] Initializing KernelSU (BakaSU) Setup"
     echo "==========================================="
-    echo "[*] Downloading and running BakaSU remote setup script..."
-    curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash
-    echo "[+] BakaSU setup finished."
+    BAKASU_PATCHES=(
+        "$KERNEL_DIR/scripts/bakasu-susfs-2.4.patch"
+        "$KERNEL_DIR/scripts/bakasu-preinit-4.19.patch"
+    )
+    if [ "$(git -C KernelSU rev-parse HEAD 2>/dev/null || true)" != "$BAKASU_REVISION" ] ||
+        [ ! -f drivers/kernelsu/Kconfig ] ||
+        ! grep -Fq 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig ||
+        ! grep -Fq 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile; then
+        echo "[*] Setting up BakaSU at $BAKASU_REVISION..."
+        curl -fLSs --retry 3 "https://raw.githubusercontent.com/Baka-SU/BakaSU/$BAKASU_REVISION/kernel/setup.sh" |
+            bash -s -- "$BAKASU_REVISION"
+    fi
+    if [ "$(git -C KernelSU rev-parse HEAD)" != "$BAKASU_REVISION" ]; then
+        echo "[!] BakaSU checkout does not match $BAKASU_REVISION." >&2
+        exit 1
+    fi
+    for BAKASU_PATCH in "${BAKASU_PATCHES[@]}"; do
+        if ! git -C KernelSU apply --reverse --check "$BAKASU_PATCH" >/dev/null 2>&1; then
+            echo "[*] Applying $(basename "$BAKASU_PATCH")..."
+            if ! git -C KernelSU apply --whitespace=nowarn "$BAKASU_PATCH"; then
+                echo "[!] Failed to apply $BAKASU_PATCH" >&2
+                git -C KernelSU apply --check --verbose "$BAKASU_PATCH" || true
+                exit 1
+            fi
+        fi
+    done
+    echo "[+] BakaSU and SUSFS 2.4 integration ready."
 
     echo "==========================================="
     echo " [*] Initializing VFS (Hybrid Mount) Setup"
@@ -216,10 +244,27 @@ build_target() {
         echo "[*] Injecting KernelSU & SUSFS configurations..."
         scripts/config --file "${OUT_DIR}/.config" \
             -e KSU \
+            -e THREAD_INFO_IN_TASK \
+            -d KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
             -e KSU_SUSFS \
+            -e KSU_SUSFS_SUS_PATH \
+            -e KSU_SUSFS_SUS_MOUNT \
+            -e KSU_SUSFS_SUS_KSTAT \
+            -e KSU_SUSFS_SPOOF_UNAME \
+            -e KSU_SUSFS_ENABLE_LOG \
+            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -e KSU_SUSFS_OPEN_REDIRECT \
+            -e KSU_SUSFS_SUS_MAP \
+            -e KSU_SUSFS_PRIORITY_UID_FILTER \
             -e KSU_TOOLKIT_SUPPORT \
-            -e KSU_MULTI_MANAGER_SUPPORT \
-            -e THREAD_INFO_IN_TASK
+            -e KSU_MULTI_MANAGER_SUPPORT
+        # The BakaSU checkout carries the scripts/bakasu-*.patch changes
+        # uncommitted, so its default "%TAG_NAME%-%COMMIT_SHA%" name ends in
+        # "-dirty". Name the pinned revision explicitly instead.
+        scripts/config --file "${OUT_DIR}/.config" \
+            --set-str KSU_FULL_NAME_FORMAT "%TAG_NAME%-${BAKASU_REVISION:0:8}"
         echo "[*] Injecting Hybrid Mount configurations..."
         scripts/config --file "${OUT_DIR}/.config" \
             -e HYBRIDMOUNT

@@ -1733,40 +1733,39 @@ static int exec_binprm(struct linux_binprm *bprm)
  */
 #ifdef CONFIG_KSU_SUSFS
 extern struct static_key_true ksu_su_compat_enabled;
-extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;
-extern bool __ksu_is_allow_uid_for_current(uid_t uid);
 extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
-			void *envp, int *flags);
-extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
-				void *envp, int *flags);
-extern int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
-			void *envp, int *flags, int *retval);
+			      void *envp, int *flags);
+extern int ksu_handle_post_execveat(int *fd, struct filename **filename_ptr, void *argv,
+				   void *envp, int *flags, int *retval);
+extern int ksu_setup_preinit_file(struct filename **filename_ptr, void *argv_user);
+extern int ksu_preinit_handle_post_execveat(int *fd, struct filename **filename_ptr,
+				void *argv_user, void *envp_user,
+				int *flags, int *retval, int *preinit_fd);
 #endif
+
 static int __do_execve_file(int fd, struct filename *filename,
 			    struct user_arg_ptr argv,
 			    struct user_arg_ptr envp,
 			    int flags, struct file *file)
 {
 	char *pathbuf = NULL;
-	struct linux_binprm *bprm;
-	struct files_struct *displaced;
+	struct linux_binprm *bprm = NULL;
+	struct files_struct *displaced = NULL;
 	int retval;
 
 #ifdef CONFIG_KSU_SUSFS
 	bool is_su_session = false;
-#endif // #ifdef CONFIG_KSU_SUSFS
+	bool is_ksu_preinit_session = false;
+	int preinit_fd = -1;
+#endif
 
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
 #ifdef CONFIG_KSU_SUSFS
-	if (likely(susfs_is_current_proc_no_su()))
-		goto orig_flow;
-	if (static_branch_likely(&ksu_su_compat_enabled)) {
-		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted))
+	if (filename && !susfs_is_current_proc_no_su() &&
+	    static_branch_likely(&ksu_su_compat_enabled))
 		is_su_session = !ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-	else
-		is_su_session = !ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
-	}
+
 orig_flow:
 #endif
 
@@ -1798,6 +1797,21 @@ orig_flow:
 	retval = prepare_bprm_creds(bprm);
 	if (retval)
 		goto out_free;
+
+#ifdef CONFIG_KSU_SUSFS
+	/*
+	 * Do not redirect init until the early allocations have succeeded.
+	 * The runner fd must also belong to the unshared files table so that
+	 * a failed exec can close it before restoring displaced files.
+	 */
+	if (unlikely(current->pid == 1) && filename && !file &&
+	    !is_su_session && !is_ksu_preinit_session &&
+	    (fd == AT_FDCWD || !(flags & AT_EMPTY_PATH))) {
+		preinit_fd = ksu_setup_preinit_file(&filename, &argv);
+		if (preinit_fd >= 0)
+			is_ksu_preinit_session = true;
+	}
+#endif
 
 	check_unsafe_exec(bprm);
 	current->in_execve = 1;
@@ -1883,10 +1897,27 @@ orig_flow:
 	}
 
 	retval = exec_binprm(bprm);
-	if (retval < 0)
+	if (retval < 0) {
+#ifdef CONFIG_KSU_SUSFS
+		/*
+		 * flush_old_exec() has destroyed the old mm and closed CLOEXEC
+		 * fds. There is no safe retry, and preinit_fd may be reused.
+		 * Only test this after exec_binprm(): earlier failures may also
+		 * have a NULL bprm->mm without having committed an exec.
+		 */
+		if (unlikely(is_ksu_preinit_session) && !bprm->mm) {
+			is_ksu_preinit_session = false;
+			preinit_fd = -1;
+		}
+#endif
 		goto out;
+	}
 
 	/* execve succeeded */
+#ifdef CONFIG_KSU_SUSFS
+	if (unlikely(is_su_session))
+		ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+#endif
 	current->fs->in_exec = 0;
 	current->in_execve = 0;
 	membarrier_execve(current);
@@ -1912,9 +1943,22 @@ out_unmark:
 	current->in_execve = 0;
 
 #ifdef CONFIG_KSU_SUSFS
-	if (unlikely(is_su_session))
-		(void)ksu_handle_post_execveat_sucompat(&fd, &filename, &argv, &envp, &flags, &retval);
-#endif // #ifdef CONFIG_KSU_SUSFS
+	if (unlikely(is_ksu_preinit_session) &&
+	    ksu_preinit_handle_post_execveat(&fd, &filename, &argv, &envp,
+					     &flags, &retval, &preinit_fd)) {
+		is_ksu_preinit_session = false;
+		preinit_fd = -1;
+		file = NULL;
+		free_bprm(bprm);
+		bprm = NULL;
+		kfree(pathbuf);
+		pathbuf = NULL;
+		if (displaced)
+			reset_files_struct(displaced);
+		displaced = NULL;
+		goto orig_flow;
+	}
+#endif
 
 out_free:
 	free_bprm(bprm);
