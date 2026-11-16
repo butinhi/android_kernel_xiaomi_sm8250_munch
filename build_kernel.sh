@@ -3,9 +3,9 @@
 # Exit on any error
 set -e
 
-# BakaSU main, 2026-11-10. The SUSFS 2.4 glue (scripts/bakasu-*.patch and the
+# BakaSU main, 2026-11-16. The SUSFS 2.4 glue (scripts/bakasu-*.patch and the
 # fs/ hooks) is tied to this revision; bump both together.
-BAKASU_REVISION="548d1dda060ca198823d8808804d01f5209ef4a9"
+BAKASU_REVISION="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
 
 # ==========================================
 # Argument Parsing
