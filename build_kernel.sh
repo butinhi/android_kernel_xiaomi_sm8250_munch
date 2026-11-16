@@ -260,6 +260,11 @@ build_target() {
             -e KSU_SUSFS_PRIORITY_UID_FILTER \
             -e KSU_TOOLKIT_SUPPORT \
             -e KSU_MULTI_MANAGER_SUPPORT
+        # The BakaSU checkout carries the scripts/bakasu-*.patch changes
+        # uncommitted, so its default "%TAG_NAME%-%COMMIT_SHA%" name ends in
+        # "-dirty". Name the pinned revision explicitly instead.
+        scripts/config --file "${OUT_DIR}/.config" \
+            --set-str KSU_FULL_NAME_FORMAT "%TAG_NAME%-${BAKASU_REVISION:0:8}"
         echo "[*] Injecting Hybrid Mount configurations..."
         scripts/config --file "${OUT_DIR}/.config" \
             -e HYBRIDMOUNT
